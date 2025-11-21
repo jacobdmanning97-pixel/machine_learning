@@ -1,0 +1,774 @@
+import requests
+import time
+import pandas as pd
+import numpy as np
+import random
+from bs4 import BeautifulSoup
+import re
+from typing import Dict
+
+class Type_Chart:
+    def __init__(self):
+        self.types = [
+            'normal', 'fire', 'water', 'electric', 'grass', 'ice',
+            'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug',
+            'rock', 'ghost', 'dragon', 'dark', 'steel', 'fairy'
+        ]
+        
+        # Initialize effectiveness matrix 
+        self.effectiveness = np.ones((18, 18))
+        
+        self.setup_type_chart()
+    
+    def setup_type_chart(self):
+        super_effective = {
+            'normal': [],
+            'fire': ['grass', 'ice', 'bug', 'steel'],
+            'water': ['fire', 'ground', 'rock'],
+            'electric': ['water', 'flying'],
+            'grass': ['water', 'ground', 'rock'],
+            'ice': ['grass', 'ground', 'flying', 'dragon'],
+            'fighting': ['normal', 'ice', 'rock', 'dark', 'steel'],
+            'poison': ['grass', 'fairy'],
+            'ground': ['fire', 'electric', 'poison', 'rock', 'steel'],
+            'flying': ['grass', 'fighting', 'bug'],
+            'psychic': ['fighting', 'poison'],
+            'bug': ['grass', 'psychic', 'dark'],
+            'rock': ['fire', 'ice', 'flying', 'bug'],
+            'ghost': ['psychic', 'ghost'],
+            'dragon': ['dragon'],
+            'dark': ['psychic', 'ghost'],
+            'steel': ['ice', 'rock', 'fairy'],
+            'fairy': ['fighting', 'dragon', 'dark']
+        }
+
+        not_very_effective = {
+            'normal': ['rock', 'steel'],
+            'fire': ['fire', 'water', 'rock', 'dragon'],
+            'water': ['water', 'grass', 'dragon'],
+            'electric': ['electric', 'grass', 'dragon'],
+            'grass': ['fire', 'grass', 'poison', 'flying', 'bug', 'dragon', 'steel'],
+            'ice': ['fire', 'water', 'ice', 'steel'],
+            'fighting': ['poison', 'flying', 'psychic', 'bug', 'fairy'],
+            'poison': ['poison', 'ground', 'rock', 'ghost'],
+            'ground': ['grass', 'bug'],
+            'flying': ['electric', 'rock', 'steel'],
+            'psychic': ['psychic', 'steel'],
+            'bug': ['fire', 'fighting', 'poison', 'flying', 'ghost', 'steel', 'fairy'],
+            'rock': ['fighting', 'ground', 'steel'],
+            'ghost': ['dark'],
+            'dragon': ['steel'],
+            'dark': ['fighting', 'dark', 'fairy'],
+            'steel': ['fire', 'water', 'electric', 'steel'],
+            'fairy': ['fire', 'poison', 'steel']
+        }
+        
+        immune = {
+            'normal': ['ghost'],
+            'fire': [],
+            'water': [],
+            'electric': ['ground'],
+            'grass': [],
+            'ice': [],
+            'fighting': ['ghost'],
+            'poison': ['steel'],
+            'ground': ['flying'],
+            'flying': [],
+            'psychic': ['dark'],
+            'bug': [],
+            'rock': [],
+            'ghost': ['normal'],
+            'dragon': ['fairy'],
+            'dark': [],
+            'steel': [],
+            'fairy': []
+        }
+        
+        # Apply the effectiveness rules to the matrix
+        for i, attack_type in enumerate(self.types):
+            # Apply super effective
+            for defense_type in super_effective[attack_type]:
+                j = self.types.index(defense_type)
+                self.effectiveness[i, j] = 2.0
+            
+            # Apply not very effective
+            for defense_type in not_very_effective[attack_type]:
+                j = self.types.index(defense_type)
+                self.effectiveness[i, j] = 0.5
+            
+            # Apply immune
+            for defense_type in immune[attack_type]:
+                j = self.types.index(defense_type)
+                self.effectiveness[i, j] = 0.0
+   
+    def effectiveness_internal(self, attack_type, defense_type):
+        i = self.types.index(attack_type)
+        j = self.types.index(defense_type)
+        return self.effectiveness[i, j]
+    
+    def effectiveness_calc_def(self, attack_type, defense_type1, defense_type2=None):
+        if defense_type2 is None:
+            return self.effectiveness_internal(attack_type, defense_type1)
+        
+        eff1 = self.effectiveness_internal(attack_type, defense_type1)
+        eff2 = self.effectiveness_internal(attack_type, defense_type2)
+        return eff1 * eff2
+    
+    def effectiveness_calc_atk(self, attack_type1, attack_type2, defense_type):
+        if attack_type2 is None:
+            return self.effectiveness_internal(attack_type1, defense_type)
+        
+        eff1 = self.effectiveness_internal(attack_type1, defense_type)
+        eff2 = self.effectiveness_internal(attack_type2, defense_type)
+        return [eff1, eff2]
+ 
+    def get_stab_coverage(self, stab_type):
+        immune_types = []
+        resistant_types = []
+        strong_types = []
+
+
+        stab1 = stab_type[0]
+        if len(stab_type) > 1:
+            stab2 = stab_type[1]
+        else:
+            stab2 = None
+
+        if stab2 == None:
+            for j, defense_type in enumerate(self.types):
+                effect = self.effectiveness_calc_atk(stab1, stab2, defense_type)
+                if effect == 0:
+                    immune_types.append(defense_type)
+                if effect == 0.5:
+                    resistant_types.append(defense_type)
+                if effect == 2.0:
+                    strong_types.append(defense_type)
+        else:
+            for j, defense_type in enumerate(self.types):
+                [effect1, effect2] = self.effectiveness_calc_atk(stab1, stab2, defense_type)
+                if effect1 == 0 and effect2 == 0:
+                    immune_types.append(defense_type)
+                if effect1 == 0.5 and effect2 == 0.5:
+                    resistant_types.append(defense_type)
+                elif effect1 == 0.5 and effect2 == 0:
+                    resistant_types.append(defense_type)
+                elif effect1 == 0 and effect2 == 0.5:
+                    resistant_types.append(defense_type)
+                if effect1 == 2.0 or effect2 == 2.0:
+                    strong_types.append(defense_type)
+
+        coverage = {
+            "Immune": [],
+            "Resistant": [],
+            "Strong": [],
+        }
+
+        coverage["Immune"] = immune_types
+        coverage["Resistant"] = resistant_types
+        coverage["Strong"] = strong_types
+
+        return coverage
+    
+    def def_coverage(self, defense_type):
+        immune_types = []
+        super_resistant_types = []
+        resistant_types = []
+        weak_types = []
+        super_weak_types = []
+
+        defense_type1 = defense_type[0]
+        if len(defense_type) > 1:
+            defense_type2 = defense_type[1]
+        else:
+            defense_type2 = None
+
+        for attack_type in self.types:
+            effectiveness_value = self.effectiveness_calc_def(attack_type, defense_type1, defense_type2)
+            if effectiveness_value == 0:
+                immune_types.append(attack_type)
+            if effectiveness_value == 0.5:
+                resistant_types.append(attack_type)
+            if effectiveness_value == 0.25:
+                super_resistant_types.append(attack_type)
+            if effectiveness_value == 2.0:
+                weak_types.append(attack_type)
+            if effectiveness_value == 4.0:
+                super_weak_types.append(attack_type)
+
+        coverage = {
+            "Immune": [],
+            "Resistant": [],
+            "Super Resistant": [],
+            "Weak": [],
+            "Super Weak": [],
+        }
+
+        coverage["Immune"] = immune_types
+        coverage["Resistant"] = resistant_types
+        coverage["Super Resistant"] = super_resistant_types
+        coverage["Weak"] = weak_types
+        coverage["Super Weak"] = super_weak_types
+
+        return coverage
+
+type_chart = Type_Chart()
+
+def get_pokemon_moves(pokemon_name):
+    url = f"https://pokeapi.co/api/v2/pokemon/{pokemon_name.lower()}"
+    response = requests.get(url)
+
+    if response.status_code == 200:
+        pokemon_data = response.json()
+
+        return [move["move"]["name"] for move in pokemon_data["moves"]]
+    
+    else:
+        return None
+
+def pikalytics(pokemon_name):
+    stat_names = ['hp', 'attack', 'defense', 'sp_attack', 'sp_defense', 'speed']
+    try:
+        name = pokemon_name.lower()
+        if '-male' in name:
+            name = name.replace('-male', '')
+        if '-female' in name:
+            name = name.replace('-female', '-f')
+        if name == 'maushold-family-of-four':
+            name = 'maushold'
+        if name == 'tauros-paldea-aqua-breed':
+            name = 'tauros-paldea-aqua'
+        if name == 'tatsugiri-curly':
+            name = 'tatsugiri'
+
+        url = f"https://www.pikalytics.com/pokedex/gen9vgc2025reghbo3/{name}"
+        response = requests.get(url)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        container = soup.find_all('div', class_='inline-block pokemon-stat-container')
+
+        moves = []
+        partners = []
+        items = []
+        abilities = []
+        evs = []
+
+        stats_container = container[0].select('div[style*="display:inline-block;vertical-align: middle;margin-left: 20px;"]')
+        moves_container = container[1].find_all('div', class_='pokedex-move-entry-new')
+        partners_container = container[2].find_all('a', class_='teammate_entry')
+        items_container = container[3].find_all('div', class_='pokedex-move-entry-new')
+        abilities_container = container[4].find_all('div', class_='pokedex-move-entry-new')
+        evs_container = container[5].find_all('div', class_='pokedex-move-entry-new')
+
+        stats = [int(div.get_text(strip=True)) for div in stats_container]
+        base_stats = {stat_name: stat for stat_name, stat in zip(stat_names, stats)}
+
+        for move in moves_container:
+            move_info = move.find_all('div', style=lambda value: 'inline-block' in value)
+            moves.append([move_info[0].text.replace(' ', '-').lower(), float(move_info[2].text.replace('%',''))/100])
+        
+        for partner in partners_container:
+            partner_info = partner.find_all('div', style=lambda value: 'inline-block' in value)
+            partners.append([partner_info[2].text.strip().replace(' ', '-').lower(), float(partner_info[-1].text.replace('%',''))/100])
+        
+        for item in items_container:
+            item_info = item.find_all('div', style=lambda value: 'inline-block' in value)
+            items.append([item_info[2].text.replace(' ', '-').lower(), float(item_info[3].text.replace('%',''))/100])
+        
+        for ability in abilities_container:
+            ability_info = ability.find_all('div', style=lambda value: 'inline-block' in value)
+            abilities.append([ability_info[0].text.replace(' ', '-').lower(), float(ability_info[1].text.replace('%',''))/100])
+        
+        for ev in evs_container:
+            ev_info = ev.find_all('div', style=lambda value: 'inline-block' in value)
+            ev_holder = {}
+            ev_holder['nature'] = ev_info[0].text.replace(' ', '-').lower()
+            for i, stat in enumerate(stat_names):
+                ev_holder[stat] = int(ev_info[i+1].text.strip().replace('/',''))
+            ev_holder['usage'] = float(ev_info[-1].text.strip().replace('%',''))/100
+            evs.append(ev_holder)
+
+        types_container = soup.find('div', class_= 'inline-block content-div-header-font')
+        types = [type.text for type in types_container.find_all('span', class_='type')]
+
+        pokemon_info = {
+            'name': pokemon_name,
+            'types': types,
+            'base_stats': base_stats,
+            'moves': moves,
+            'partners': partners,
+            'items': items,
+            'abilities': abilities,
+            'natures/evs': evs
+        }
+
+        pokemon_info['def_coverage'] = type_chart.def_coverage(pokemon_info['types'])
+        pokemon_info['stab_coverage'] = type_chart.get_stab_coverage(pokemon_info['types'])
+
+        bst = 0
+
+        for stat, value in pokemon_info['base_stats'].items():
+            bst += value
+        pokemon_info['base_stat_total'] = bst
+
+
+        return pokemon_info
+
+    except requests.RequestException as e:
+        print(f"Error fetching data: {e}")
+
+def parse_pokepaste(url, names, placement, index = 1):
+    if 'Champion' in placement:
+        placement = 1
+    else:
+        placement = int(''.join(filter(str.isdigit, placement)))
+
+    try:
+        stats = ['hp', 'atk', 'def', 'spa', 'spd', 'spe']
+        other_stats = ['hp', 'attack', 'defense', 'sp_attack', 'sp_defense', 'speed']
+
+        url = f"{url}/raw"
+        response = requests.get(url)
+        response.raise_for_status()
+
+        text = response.text.strip()
+
+        blocks = [b.strip() for b in text.split('\r\n\r') if b.strip()]
+        team = {}
+
+        split_names = []
+
+        for name in names:
+            split_names.append(name.split('-')[0])
+
+        for j, block in enumerate(blocks):
+            lines = block.split('\n')
+
+            name_part, item = lines[0].split('@')
+            name_part = name_part.strip().lower()
+            item = item.strip().replace(' ','-').lower()
+
+            name = next((names[i] for i,pkm in enumerate(split_names) if pkm.lower() in name_part.lower()), None)
+
+            evs_dict = {other_stat:0 for other_stat in other_stats}
+            ivs_dict = {other_stat:31 for other_stat in other_stats}
+
+            data = {
+                'name': name,
+                'item': item,
+                'ability': None,
+                'tera_type': None,
+                'evs': None,
+                'nature': None,
+                'ivs': None,
+                'moves': []
+            }
+
+            for line in lines[1:]:
+                if line.startswith('Ability:'):
+                    data['ability'] = line.split(':', 1)[1].strip().lower().replace(' ','-')
+
+                elif line.startswith('Tera Type:'):
+                    data['tera_type'] = line.split(':', 1)[1].strip().lower()
+
+                elif line.startswith('EVs:'):
+                    data['evs'] = line.split(':', 1)[1].strip().lower()
+
+                elif 'Nature' in line:
+                    data['nature'] = line.strip().replace(' Nature','').lower()
+
+                elif line.startswith('IVs:'):
+                    data['ivs'] = line.split(':', 1)[1].strip().lower()
+
+                elif line.startswith('- '):
+                    data['moves'].append(line[2:].strip())
+
+            if data['evs'] is not None:
+                evs = data['evs'].split(' / ')
+                for ev in evs:
+                    for stat, other_stat in zip(stats, other_stats):
+                        if stat in ev:
+                            evs_dict[other_stat] = int(ev.replace(f" {stat}",''))
+
+            if data['ivs'] is not None:
+                ivs = data['ivs'].split(' / ')
+                for iv in ivs:
+                    for stat, other_stat in zip(stats, other_stats):
+                        if stat in iv:
+                            ivs_dict[other_stat] = float(iv.replace(f" {stat}",''))
+
+            data['evs'] = evs_dict
+            data['ivs'] = ivs_dict
+            data['moves'] = [move.lower().replace(' ','-') for move in data['moves']]
+
+            team[f"Member {j+1}"] = data
+        
+        team['placement'] = placement
+
+        return team
+
+    except requests.RequestException as e:
+        return f"Error fetching data: {e}. Team Number:{index}"
+
+def nimbasacitypost_regulation_h_sample_teams():
+    details = []
+    try:
+        url = 'https://www.nimbasacitypost.com/2025/08/regulation-h-sample-teams.html'
+        response = requests.get(url)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        target_rows = soup.find_all('tr', style=lambda value: value and 'height: 0pt' in value)
+
+        for target in target_rows:
+            tar = target.find_all('td', style=lambda value: value and 'background-color' in value)
+            img_tags = tar[2].find_all('img')
+            team = [img.get('alt') for img in img_tags]
+
+            for i, member in enumerate(team):
+                if 'Basculegion' in member:
+                    team[i] = 'basculegion-male'
+                if 'Maushold' in member:
+                    team[i] = 'maushold-family-of-four'
+                if '[Bloodmoon]' in member:
+                    team[i] = 'ursaluna-bloodmoon'
+                if '[Hisuian Form]' in member:
+                    team[i] = team[i].replace(' [Hisuian Form]', '-hisui')
+                if 'Indeedee' in member:
+                    if '[Female]' in member:
+                        team[i] = 'indeedee-female'
+                    if '[Male]' in member:
+                        team[i] = 'indeedee-male'
+                if '[Alolan Form]' in member:
+                    team[i] = team[i].replace(' [Alolan Form]', '-alola')
+                if '[Galarian Form]' in member:
+                    team[i] = team[i].replace(' [Galarian Form]', '-galar')
+                if '[Paldean Form - Aqua Breed]' in member:
+                    team[i] = 'tauros-paldea-aqua-breed'
+                if 'Sinistcha' in member:
+                    team[i] = 'sinistcha'
+                if 'Tatsugiri' in member:
+                    if '[Curly Form]' in member:
+                        team[i] = 'tatsugiri-curly'
+                team[i] = team[i].lower()
+
+            try:
+                details.append([tar[1].get_text(strip = True), team, tar[3].find('a')['href']])
+            except: pass
+        
+        return details
+
+    except requests.RequestException as e:
+        print(f"Error fetching data: {e}")
+
+class Pokedex:
+    def __init__(self):
+        self.pokemon_database = {}
+    
+    def register_pokemon(self, poke_info):
+        """Register a Pokemon in the database"""
+        if poke_info['name'].lower() not in self.pokemon_database:
+            self.pokemon_database[poke_info['name'].lower()] = poke_info
+        else:
+            print("Pokemon already in database")
+    
+    def load_database(self, database):
+        self.pokemon_database = database
+
+    def load_instance(self, loaded):
+        pokemon_name = loaded['name'].lower()
+        if pokemon_name not in self.pokemon_database:
+            return f"Pokemon {pokemon_name} not found in database"
+        else:
+            base_data = self.pokemon_database[pokemon_name]
+            base_stats = base_data['base_stats']
+            nature = loaded['nature']
+            tera = loaded['tera_type']
+            evs = loaded['evs']
+            ivs = loaded['ivs']
+            stats = self.calculate_final_stats(base_stats, evs, ivs, nature)
+            bst = base_data['base_stat_total']
+            roles = self.define_role(base_stats, bst, stats)
+            move_names = loaded['moves']
+
+            if tera == 'stellar':
+                tera_coverage = 'Offensive'
+            elif tera in base_data['types']:
+                tera_coverage = 'Offensive'
+            else:
+                tera_coverage = type_chart.def_coverage([tera])
+
+            if evs is None:
+                #redo ivs for sp_attacker maybe speed iv too
+                evs_container = loaded['natures/evs']
+                weight = [container['usage'] for container in evs_container]
+                evs_container = random.choices(evs_container, weights = weight, k = 1)
+                evs_items = list(evs_container[0].items())
+                evs = dict(evs_items[1:-1])
+
+            return {
+                'name': pokemon_name,
+                'types': base_data['types'],
+                'tera': tera,
+                'tera_coverage': tera_coverage,
+                'roles': roles,
+                'defensive_coverage': base_data['def_coverage'],
+                'stab_coverage': base_data['stab_coverage'],
+                'nature': nature,
+                'evs': evs,
+                'bst': bst,
+                'max_stat': max(stats, key = stats.get),
+                'min_stat': min(stats, key = stats.get),
+                'stats': stats,
+                'base_stats': base_stats,
+                'moves': move_names
+            }
+
+    def define_role(self, base_stats, bst, stats):
+        roles = []
+
+        max_atk = max(['attack', 'sp_attack'], key = lambda stat: stats[stat])
+        bulk_score = (base_stats['hp'] + base_stats['defense'] + base_stats['sp_defense'])/3
+
+        if bst/6 <= base_stats[max_atk]:
+            roles.append(f'{max_atk}er')
+        if bst/6 <= bulk_score:
+            roles.append('bulky')
+        if bst/6 <= base_stats['speed']:
+            roles.append('speedy')
+
+        return roles
+
+    def create_instance(self, pokemon_name):
+        if pokemon_name not in self.pokemon_database:
+            raise ValueError(f"Pokemon {pokemon_name} not found in database")
+        pokemon_data = self.pokemon_database[pokemon_name]
+
+        types = ['normal', 'fire', 'water', 'electric', 'grass', 'ice',  'fighting',
+                'poison', 'ground', 'flying', 'psychic', 'bug', 'rock', 
+                'ghost', 'dragon', 'dark', 'steel', 'fairy', 'stellar']
+        base_stats = pokemon_data['base_stats']
+
+        tera = random.choice(types)
+
+        if tera == 'stellar':
+            tera_coverage = 'Offensive'
+        elif tera in pokemon_data['types']:
+            tera_coverage = 'Offensive'
+        else:
+            tera_coverage = type_chart.def_coverage([tera])
+
+        evs_container = pokemon_data['natures/evs']
+        weight = [container['usage'] for container in evs_container]
+        evs_container = random.choices(evs_container, weights = weight, k = 1)
+
+        nature = evs_container[0]['nature']   
+        bst = pokemon_data['base_stat_total']
+
+        evs_items = list(evs_container[0].items())
+        evs = dict(evs_items[1:-1])
+
+        pre_role = self.get_nature_modifiers(nature)
+
+        if 'sp_attacker' in pre_role:
+            if pre_role['sp_attacker'] == 1.1:
+                ivs = {'hp': 31, 'attack': 0, 'defense': 31, 'sp_attack': 31, 'sp_defense': 31, 'speed': 31}
+        else:
+            ivs = {'hp': 31, 'attack': 31, 'defense': 31, 'sp_attack': 31, 'sp_defense': 31, 'speed': 31}
+
+        stats = self.calculate_final_stats(base_stats, evs, ivs, nature)
+
+        roles = self.define_role(base_stats, bst, stats)
+
+
+        moves_container = pokemon_data['moves']
+        weight = [container[-1] for container in moves_container]
+        moves = random.choices(moves_container, weights = weight, k = 4)
+
+        chosen_indices = np.random.choice(len(moves_container), size = 4, replace = False, p = np.array(weight)/sum(weight))
+        moves = [moves_container[move] for move in chosen_indices.tolist()]
+        moves = [move[0] for move in moves]
+
+        all_moves = get_pokemon_moves(pokemon_name)
+
+        for move in moves:
+            if move != 'other':
+                all_moves.remove(move)
+
+        for i, move in enumerate(moves):
+            if move == 'other':
+                moves[i] = move.replace('other', random.choice(all_moves))
+
+        return {
+            'name': pokemon_data['name'],
+            'types': pokemon_data['types'],
+            'tera': tera,
+            'tera_coverage': tera_coverage,
+            'roles': roles,
+            'defensive_coverage': pokemon_data['def_coverage'],
+            'stab_coverage': pokemon_data['stab_coverage'],
+            'nature': nature,
+            'evs': evs,
+            'bst': bst,
+            'max_stat': max(dict(list(stats.items())[1:]), key = stats.get),
+            'min_stat': min(dict(list(stats.items())[1:]), key = stats.get),
+            'stats': stats,
+            'base_stats': base_stats,
+            'moves': moves
+        }
+    
+    def calculate_final_stats(self, base_stats: Dict[str, int], evs: Dict[str, int],  ivs: Dict[str, int],
+                            nature: str) -> Dict[str, int]:
+        """Calculate final stats considering base stats, EVs, IVs, nature, and level"""
+        stats = {}
+        nature_modifiers = self.get_nature_modifiers(nature)
+        for stat, base in base_stats.items():
+            if stat == 'hp':
+                stats[stat] = self.calculate_hp_stat(base, evs[stat])
+            else:
+                stats[stat] = self.calculate_other_stat(base, evs[stat], ivs[stat], nature_modifiers.get(stat, 1.0))
+        return stats
+    
+    def calculate_hp_stat(self, base: int, ev: int) -> int:
+        """Calculate HP stat"""
+        # HP formula: ((2 * Base + IV + EV/4) * Level) / 100 + Level + 10
+        return ((2 * base + 31 + ev // 4) * 50) // 100 + 50 + 10
+    
+    def calculate_other_stat(self, base: int, ev: int, iv: int, nature_modifier: float) -> int:
+        """Calculate other stats (Attack, Defense, etc.)"""
+        # Other stats formula: (((2 * Base + IV + EV/4) * 50) / 100 + 5) * Nature
+        stat_value = ((2 * base + iv + ev // 4) * 50) // 100 + 5
+        return int(stat_value * nature_modifier)
+    
+    def get_nature_modifiers(self, nature: str) -> Dict[str, float]:
+        """Get stat modifiers for a given nature"""
+        # Nature effects: +10% to one stat, -10% to another
+        nature_effects = {
+            'Hardy': {'attack': 1.0, 'attack': 1.0},
+            'Lonely': {'attack': 1.1, 'defense': 0.9},
+            'Brave': {'attack': 1.1, 'speed': 0.9},
+            'Adamant': {'attack': 1.1, 'sp_attack': 0.9},
+            'Naughty': {'attack': 1.1, 'sp_defense': 0.9},
+            'Bold': {'defense': 1.1, 'attack': 0.9},
+            'Docile': {'defense': 1.0, 'defense': 1.0},
+            'Relaxed': {'defense': 1.1, 'speed': 0.9},
+            'Impish': {'defense': 1.1, 'sp_attack': 0.9},
+            'Lax': {'defense': 1.1, 'sp_defense': 0.9},
+            'Timid': {'speed': 1.1, 'attack': 0.9},
+            'Hasty': {'speed': 1.1, 'defense': 0.9},
+            'Serious': {'speed': 1.0, 'speed': 1.0},
+            'Jolly': {'speed': 1.1, 'sp_attack': 0.9},
+            'Naive': {'speed': 1.1, 'sp_defense': 0.9},
+            'Modest': {'sp_attack': 1.1, 'attack': 0.9},
+            'Mild': {'sp_attack': 1.1, 'defense': 0.9},
+            'Quiet': {'sp_attack': 1.1, 'speed': 0.9},
+            'Bashful': {'sp_attack': 1.0, 'sp_attack': 1.0},
+            'Rash': {'sp_attack': 1.1, 'sp_defense': 0.9},
+            'Calm': {'sp_defense': 1.1, 'attack': 0.9},
+            'Gentle': {'sp_defense': 1.1, 'defense': 0.9},
+            'Sassy': {'sp_defense': 1.1, 'speed': 0.9},
+            'Careful': {'sp_defense': 1.1, 'sp_attack': 0.9},
+            'Quirky' : {'sp_defense': 1.0, 'sp_defense': 1.0}
+        }
+        return nature_effects.get(nature, {})
+
+    def print_pokemon_details(self, pokemon_instance: Dict):
+        """Pretty print Pokemon details"""
+        print(f"\n=== {pokemon_instance['name'].capitalize()} ===")
+        print(f"Type: {', '.join(pokemon_instance['types'])}")
+        print("\nDefensive Coverage:")
+        for type, coverage in pokemon_instance['defensive_coverage'].items():
+            print(f"  {type.upper()}: {", ".join(coverage)}")
+        print("\nStab Coverage:")
+        for type, coverage in pokemon_instance['stab_coverage'].items():
+            print(f"  {type.upper()}: {", ".join(coverage)}")
+        print(f"\nTera Type: {pokemon_instance['tera']}")
+        print("Tera Coverage:")
+        if pokemon_instance['tera_coverage'] == 'Offensive':
+            print("  Tera is offensive")
+        else:
+            for type, coverage in pokemon_instance['tera_coverage'].items():
+                print(f"  {type.upper()}: {", ".join(coverage)}")
+        print("\nRoles")
+        print(f"  {", ".join(pokemon_instance['roles'])}")
+        print(f"\nNature: {pokemon_instance['nature']}")
+        print("EVs:")
+        ev_tot = 0
+        for stat, ev in pokemon_instance['evs'].items():
+            print(f"  {stat.upper()}: {ev}")
+            ev_tot += ev
+        print("Total EVs: ",ev_tot)
+        print("\nStats:")
+        for stat, value in pokemon_instance['stats'].items():
+            print(f"  {stat.upper()}: {value}")
+        print(f"BST: {pokemon_instance['bst']}, Max Stat: {pokemon_instance['max_stat']}, Min Stat: {pokemon_instance['min_stat']}")
+        print("\nMoves:")
+        for move in pokemon_instance['moves']:
+            print(f"  {move.replace('-',' ').capitalize()}")
+
+pokedex = Pokedex()
+
+# teams_info = nimbasacitypost_regulation_h_sample_teams()
+
+# for team_container in teams_info:
+#     placement = team_container[0]
+#     pokemon_names = team_container[1]
+#     url = team_container[2]
+
+#     teams = parse_pokepaste(url, pokemon_names, placement)
+
+#     for member in list(teams)[:6]:
+#         team_member = pikalytics(teams[member]['name'])
+#         pokedex.register_pokemon(team_member)
+#         member_instance = pokedex.load_instance(teams[member])
+#         pokedex.print_pokemon_details(member_instance)
+#         time.sleep(1)
+
+# gholdengo = pikalytics('gholdengo')
+
+# pokedex.register_pokemon(gholdengo)
+# gholdengo_instance = pokedex.create_instance('gholdengo')
+# pokedex.print_pokemon_details(gholdengo_instance)
+
+# url = 'https://pokepast.es/c5f5b2d151a82b44'
+
+# team = parse_pokepaste(url)
+
+# for member in team:
+#     team_member = pikalytics(team[member]['name'])
+#     pokedex.register_pokemon(team_member)
+#     member_instance = pokedex.load_instance(team[member])
+#     pokedex.print_pokemon_details(member_instance)
+
+df = pd.read_csv("C:\\Users\\jacob\\OneDrive\\Desktop\\Reg H Data\\VGCPastes Repository.csv", header = 0)
+df = df[df['EVs'] == 'Yes']
+df = df[df['Category'] == 'In Person Event']
+df = df[df['Tournament / Event'].str.contains('Regional')]
+
+print(len(df))
+
+for i in range(len(df)):
+    placement = df.iloc[i]['Rank']
+    pokemon_names = [df.iloc[i][f"Pokemon {j+1}"] for j in range(6)]
+    url = df.iloc[i]['Pokepaste']
+
+    teams = parse_pokepaste(url, pokemon_names, placement)
+
+    for member in list(teams)[:6]:
+        print(member)
+        if teams[member]['name'] != None:
+            if teams[member]['name'].lower() not in pokedex.pokemon_database:
+                team_member = pikalytics(teams[member]['name'])
+                if team_member != None:
+                    pokedex.register_pokemon(team_member)
+            else:
+                team_member = pokedex.pokemon_database[teams[member]['name'].lower()]
+            if team_member != None:
+                member_instance = pokedex.load_instance(teams[member])
+                #pokedex.print_pokemon_details(member_instance)
+                time.sleep(1)
+            else: 
+                print(teams[member]['name'])
+        else: 
+            print(teams[member])
+    print(i)
